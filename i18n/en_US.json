@@ -1,0 +1,17 @@
+{
+  "pluginName": "Mist Settings",
+  "openSettings": "Open Mist Settings",
+  "tabLook": "Appearance",
+  "tabColor": "Colors & Opacity",
+  "tabBg": "Background",
+  "tabFont": "Typography",
+  "tabIcon": "Doc Tree Icons",
+  "tabAbout": "About",
+  "save": "Save",
+  "reset": "Reset",
+  "cancel": "Cancel",
+  "notMistTheme": "Mist theme is not active; plugin disabled",
+  "followTheme": "Follow theme",
+  "customized": "Custom",
+  "tabFloat": "Floating Panels"
+}
