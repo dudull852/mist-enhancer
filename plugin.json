@@ -1,0 +1,50 @@
+{
+  "name": "mist-enhancer",
+  "author": "WorkBuddy",
+  "url": "https://github.com/dudull852/mist-enhancer",
+  "version": "0.2.28",
+  "minAppVersion": "3.8.0",
+  "backends": [
+    "all"
+  ],
+  "frontends": [
+    "desktop",
+    "desktop-window",
+    "mobile",
+    "browser-desktop"
+  ],
+  "displayName": {
+    "default": "Mist Settings",
+    "zh-CN": "薄雾设置"
+  },
+  "description": {
+    "default": "Visual settings for the Mist theme: per-region colours and opacity, background image, floating-panel glass and pop animation, fonts, doc-tree icons, global contrast. Works only while the Mist theme is active and unloads itself on theme switch.",
+    "zh-CN": "为「薄雾」主题提供可视化设置：分区颜色与透明度、背景图、浮动面板玻璃与弹出动画、字体字号、文档树图标、全局对比度。仅在薄雾主题下生效，切换主题自动停用。"
+  },
+  "readme": {
+    "default": "README.md",
+    "zh-CN": "README.zh-CN.md"
+  },
+  "icon": "icon.png",
+  "preview": "preview.png",
+  "keywords": [
+    "mist",
+    "薄雾",
+    "theme settings",
+    "主题设置",
+    "opacity",
+    "透明度",
+    "background",
+    "背景图",
+    "font",
+    "字体",
+    "icon",
+    "图标",
+    "contrast",
+    "对比度",
+    "floating panel",
+    "浮动面板",
+    "glass",
+    "玻璃"
+  ]
+}
