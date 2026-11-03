@@ -1,0 +1,17 @@
+{
+  "pluginName": "薄雾设置",
+  "openSettings": "打开薄雾设置",
+  "tabLook": "外观",
+  "tabColor": "颜色与透明",
+  "tabBg": "背景图",
+  "tabFont": "字体",
+  "tabIcon": "文档树图标",
+  "tabAbout": "关于",
+  "save": "保存",
+  "reset": "恢复默认",
+  "cancel": "取消",
+  "notMistTheme": "当前不是薄雾主题，插件已自动停用",
+  "followTheme": "跟随主题",
+  "customized": "已自定义",
+  "tabFloat": "浮动面板"
+}
