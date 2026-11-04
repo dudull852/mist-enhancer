@@ -12,10 +12,28 @@ the plugin wrote is reverted — nothing is left behind in your DOM.
 | Concern | Owner |
 |---|---|
 | Frameless layout, frosted glass, floating right dock, transparent breadcrumb, top-bar separator | `theme.css` (complete without the plugin) |
-| Region colours and opacity, background image, fonts, doc-tree icons, contrast | this plugin (needs a panel and persistence) |
+| Region colours and opacity, background image, fonts and weights, table width, doc-tree icons, contrast | this plugin (needs a panel and persistence) |
 
 In one line: **the theme is the skin, the plugin is the remote control.** Remove the
 remote and the skin must still work.
+
+## What's new (0.2.28 → 0.2.30)
+
+- **Adjustable font weights** (0.2.30) — the *Typography* page gains four weight boxes:
+  **body / doc tree / multi-level headings / document title**. Range 100–900, step 10,
+  applied instantly. Multi-level headings default to 530, document title to 600.
+- **Table width adaptation** (0.2.29) — a new toggle on the *Appearance* page. With it on,
+  tables never exceed the editor width: overflowing columns scale down proportionally,
+  while short tables stay narrow instead of stretching. The theme side is driven by
+  `html[data-mist-table-fit]`.
+- **Local font picker** — pick from the fonts installed on your machine (scrollable list,
+  each row rendered in its own typeface) or type a name by hand; separate multiple fonts
+  with commas.
+
+> ⚠️ **Weight doesn't seem to change?** You need a **multi-weight / variable font**. Arial
+> and SimHei only have two weights, so 330 and 530 both snap to the same value. Source Han
+> Sans SC, Inter, Segoe UI and PingFang SC are variable fonts where 200/400/530/700 are
+> all distinguishable. For Chinese text, Source Han Sans SC is a good pick.
 
 ## Features
 
@@ -34,8 +52,9 @@ remote and the skin must still work.
 2. **Background image.** Your own picture, scoped to the whole window or to the editor
    only, with fill / fit / tile placement. Uploads are downscaled to 1920px wide and
    re-encoded as JPEG so the settings file does not balloon.
-3. **Typography.** Body font and size, document-tree font and size, and an independent
-   document-title size.
+3. **Typography.** Body font and size, document-tree font and size, an independent
+   document-title size, plus four **weight** boxes (body / doc tree / headings / document
+   title, 100–900) that apply instantly.
 4. **Doc-tree icons.** Pick the default notebook and document icons from the icon pack you
    have enabled, with search. Only entries without a custom icon are touched; anything you
    set yourself is left alone.
@@ -62,6 +81,14 @@ does nothing on other themes.
 - Settings live in `data/storage/petal/mist-enhancer/settings.json`.
 - Requires the Mist theme. Without it the panel still opens but shows *not Mist, settings
   disabled* and writes nothing.
+
+## Feedback
+
+Found a bug or have a suggestion? Search **Xiaohongshu (RED)** for account
+**`9528590876`** and send a message mentioning "Mist Settings plugin + your SiYuan
+version + steps to reproduce". I'll get to it as soon as I can.
+
+You can also open a [GitHub issue](https://github.com/dudull852/mist-enhancer/issues).
 
 ## License
 
