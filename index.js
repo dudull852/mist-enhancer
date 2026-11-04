@@ -146,12 +146,24 @@ const DEFAULT_STATE = {
     line: "",
   },
   bg: { img: "", fit: "cover", pos: "center", scope: "window" },
-  font: { editorFont: "", editorSize: 16, treeFont: "", treeSize: 14, titleSize: 26 },
+  font: { editorFont: "", editorSize: 16, treeFont: "", treeSize: 14, titleSize: 26,
+    /* 字重（2026-11-04）：交给用户自己填数字看效果，不再写死在主题里。
+       editorWeight 正文 / headingWeight 多级标题 / treeWeight 文档树 / titleWeight 文档标题。
+       注意：真变细需要「可变字体」支撑；普通字体只有 400/700 几档，填 530 之类会就近取。
+       缺省值：正文 400（原生）、标题 530（与主题 2.10 默认一致）、目录 400（原生）、
+               文档标题 600（思源原生半粗档，与多级标题同基准，用户可调）。 */
+    editorWeight: 400, headingWeight: 530, treeWeight: 400, titleWeight: 600 },
   contrast: 50,
   icons: { nb: ICON_NOTEBOOK, doc: ICON_FILE },
   /* 导图配色（0.2.25）：保留思源原色相，只把每个节点 / 连线的颜色降饱和 + 提亮。
      想留思源原样（一点不减淡）就把它关掉，见 msbMmStop()。 */
   mindmap: { enable: true },
+
+  /* ===== 表格宽度自适应编辑器（用户请求）=====
+     默认关。开启后：表格宽度 ≤ 编辑区，超出时按列比例缩到编辑区宽；
+     内容少时仍保持窄、不拉伸。实现是给 html 打 data-mist-table-fit，
+     由 theme.css 里 [data-mist-table-fit] 那段接管表格尺寸。 */
+  tableFit: false,
 
   /* ===== 浮动面板（0.2.9）=====
      浮动布局 = 侧边面板「取消固定」后压在编辑区之上的浮层（DOM 上带 layout--float）。
@@ -1956,6 +1968,12 @@ class MistEnhancer extends Plugin {
       this.watchPinButtons();
     }
 
+    /* 表格宽度自适应编辑器（用户请求）：开 → html[data-mist-table-fit]，
+       由 theme.css 的 [data-mist-table-fit] 段接管表格尺寸（max-width + 固定布局按比例缩）。
+       关 → 撤掉属性，回落思源原生 inline-table。 */
+    if (this.state.tableFit) root.setAttribute("data-mist-table-fit", "1");
+    else root.removeAttribute("data-mist-table-fit");
+
     /* 背景图 */
     const bg = this.state.bg;
     if (bg.img) {
@@ -1982,6 +2000,13 @@ class MistEnhancer extends Plugin {
     st.setProperty("--mist-editor-size", (f.editorSize || 16) + "px");
     st.setProperty("--mist-tree-size", (f.treeSize || 14) + "px");
     st.setProperty("--mist-title-size", (f.titleSize || 26) + "px");
+
+    /* 字重（2026-11-04）：正文 / 多级标题 / 文档树，交给用户在「字体」页填数字实时调。
+       Number() 容错：空串/非法 → NaN → || 兜底到缺省。主题侧用 var(--mist-*-weight, 缺省) 读。 */
+    st.setProperty("--mist-editor-weight", (Number(f.editorWeight) || 400));
+    st.setProperty("--mist-heading-weight", (Number(f.headingWeight) || 530));
+    st.setProperty("--mist-tree-weight", (Number(f.treeWeight) || 400));
+    st.setProperty("--mist-title-weight", (Number(f.titleWeight) || 600));
 
     /* 全局对比度 */
     const base = TEXT_BASE[mode] || TEXT_BASE.light;
@@ -2036,6 +2061,10 @@ class MistEnhancer extends Plugin {
       "--mist-editor-size",
       "--mist-tree-size",
       "--mist-title-size",
+      "--mist-editor-weight",
+      "--mist-heading-weight",
+      "--mist-tree-weight",
+      "--mist-title-weight",
       "--mist-float-dur",
       "--mist-float-ease",
     ].forEach((v) => st.removeProperty(v));
@@ -2043,6 +2072,7 @@ class MistEnhancer extends Plugin {
     root.removeAttribute(FLAG_ATTR);
     root.removeAttribute("data-mist-scope");
     root.removeAttribute("data-mist-float");
+    root.removeAttribute("data-mist-table-fit");
     document.querySelectorAll(".mist-float-pop").forEach((el) => el.classList.remove("mist-float-pop"));
     this.unwatchFloatDock();
     this.unwatchPinButtons();
@@ -3479,6 +3509,15 @@ class MistEnhancer extends Plugin {
       </div>
       <div class="mist-hint">50 = 主题默认。调低文字会往背景色靠（更柔和但更难读），调高会往纯黑/纯白靠。只影响文字，不动背景。</div>
       <div class="mist-sep"></div>
+      <div class="mist-grp">表格宽度</div>
+      <div class="mist-row">
+        <span class="mist-lb">自适应编辑器宽</span>
+        <span class="mist-ctl">
+          <input type="checkbox" class="b3-check" data-bool="tableFit">
+          <span class="mist-hint" style="margin:0">表格宽度不超过编辑区：超出时按列比例缩到编辑区宽；内容少时仍保持窄、不拉伸</span>
+        </span>
+      </div>
+      <div class="mist-sep"></div>
       <div class="mist-grp">当前状态</div>
       <div class="mist-about" id="mistStatus"></div>
     </div>
@@ -3663,6 +3702,10 @@ class MistEnhancer extends Plugin {
         <span class="mist-lb">字号</span>
         <span class="mist-ctl"><input class="mist-range" type="range" min="12" max="28" step="0.5" data-k="editorSize"><span class="mist-num" data-v="editorSize"></span></span>
       </div>
+      <div class="mist-row">
+        <span class="mist-lb">字重</span>
+        <span class="mist-ctl"><input class="b3-text-field" type="number" min="100" max="900" step="10" data-k="editorWeight" style="width:88px"><span class="mist-num" data-v="editorWeight"></span></span>
+      </div>
       <div class="mist-grp">文档树</div>
       <div class="mist-row">
         <span class="mist-lb">字体</span>
@@ -3675,6 +3718,17 @@ class MistEnhancer extends Plugin {
         <span class="mist-lb">字号</span>
         <span class="mist-ctl"><input class="mist-range" type="range" min="10" max="22" step="0.5" data-k="treeSize"><span class="mist-num" data-v="treeSize"></span></span>
       </div>
+      <div class="mist-row">
+        <span class="mist-lb">字重</span>
+        <span class="mist-ctl"><input class="b3-text-field" type="number" min="100" max="900" step="10" data-k="treeWeight" style="width:88px"><span class="mist-num" data-v="treeWeight"></span></span>
+      </div>
+
+      <div class="mist-grp">多级标题</div>
+      <div class="mist-row">
+        <span class="mist-lb">字重</span>
+        <span class="mist-ctl"><input class="b3-text-field" type="number" min="100" max="900" step="10" data-k="headingWeight" style="width:88px"><span class="mist-num" data-v="headingWeight"></span></span>
+      </div>
+      <div class="mist-hint">H1–H6 统一字重。思源默认 600，比正文重、层级靠字号区分。填 530 左右更细；想按层级分别设暂不支持，先统一一个值。</div>
 
       <div class="mist-fontpick" data-fontpick>
         <div class="mist-picker-top">
@@ -3689,7 +3743,11 @@ class MistEnhancer extends Plugin {
         <span class="mist-lb">字号</span>
         <span class="mist-ctl"><input class="mist-range" type="range" min="16" max="46" step="0.5" data-k="titleSize"><span class="mist-num" data-v="titleSize"></span></span>
       </div>
-      <div class="mist-hint">标题字号独立于正文，改正文不会带着标题一起变。字体名带空格会自动加引号，多个字体可用英文逗号分隔。点「选择」可从<b>本机已安装字体</b>里挑（列表可上下滚动，每行用字体自身显示），也可以直接手打字体名。</div>
+      <div class="mist-row">
+        <span class="mist-lb">字重</span>
+        <span class="mist-ctl"><input class="b3-text-field" type="number" min="100" max="900" step="10" data-k="titleWeight" style="width:88px"><span class="mist-num" data-v="titleWeight"></span></span>
+      </div>
+      <div class="mist-hint">标题字号独立于正文，改正文不会带着标题一起变。字体名带空格会自动加引号，多个字体可用英文逗号分隔。点「选择」可从<b>本机已安装字体</b>里挑（列表可上下滚动，每行用字体自身显示），也可以直接手打字体名。字重缺省 600（思源原生半粗档），想更细可填 400–550 之间的数（需本机字体为可变字体才显中间档）。</div>
     </div>
 
     <div class="mist-pane" id="pane-icon">
@@ -3794,6 +3852,14 @@ class MistEnhancer extends Plugin {
     ea("[data-fk]").forEach((el) => {
       el.addEventListener("change", () => {
         state.float[el.getAttribute("data-fk")] = !!el.checked;
+        this.apply();
+        this.saveState();
+      });
+    });
+    /* 顶层布尔开关（如「表格宽度自适应编辑器」）：写到 state[boolKey] */
+    ea("[data-bool]").forEach((el) => {
+      el.addEventListener("change", () => {
+        state[el.getAttribute("data-bool")] = !!el.checked;
         this.apply();
         this.saveState();
       });
@@ -4203,15 +4269,21 @@ class MistEnhancer extends Plugin {
     set('[data-k="bgScope"]', this.state.bg.scope);
     set('[data-k="editorFont"]', this.state.font.editorFont);
     set('[data-k="editorSize"]', this.state.font.editorSize);
+    set('[data-k="editorWeight"]', this.state.font.editorWeight);
     set('[data-k="treeFont"]', this.state.font.treeFont);
     set('[data-k="treeSize"]', this.state.font.treeSize);
+    set('[data-k="treeWeight"]', this.state.font.treeWeight);
+    set('[data-k="headingWeight"]', this.state.font.headingWeight);
     set('[data-k="titleSize"]', this.state.font.titleSize);
+    set('[data-k="titleWeight"]', this.state.font.titleWeight);
     const fl = this.state.float || {};
     Object.keys(FLOAT_KMAP).forEach((k) => set('[data-k="' + k + '"]', fl[FLOAT_KMAP[k]]));
     ["enable", "pinBtn", "grain"].forEach((k) => {
       const cb = root.querySelector('[data-fk="' + k + '"]');
       if (cb) cb.checked = !!fl[k];
     });
+    const tb = root.querySelector('[data-bool="tableFit"]');
+    if (tb) tb.checked = !!this.state.tableFit;
     const fh = root.querySelector("#mistFloatHint");
     if (fh) {
       const a = FLOAT_ANIMS.find((x) => x.key === (fl.anim || "none"));
@@ -4246,6 +4318,10 @@ class MistEnhancer extends Plugin {
     put("editorSize", this.state.font.editorSize + "px");
     put("treeSize", this.state.font.treeSize + "px");
     put("titleSize", this.state.font.titleSize + "px");
+    put("editorWeight", this.state.font.editorWeight);
+    put("treeWeight", this.state.font.treeWeight);
+    put("headingWeight", this.state.font.headingWeight);
+    put("titleWeight", this.state.font.titleWeight);
     const fl = this.state.float || {};
     put("floatRadius", fl.radius + "px");
     put("floatBlur", fl.blur + "px");
