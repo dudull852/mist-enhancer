@@ -155,9 +155,10 @@ const DEFAULT_STATE = {
     editorWeight: 400, headingWeight: 530, treeWeight: 400, titleWeight: 600 },
   contrast: 50,
   icons: { nb: ICON_NOTEBOOK, doc: ICON_FILE },
-  /* 导图配色（0.2.25）：保留思源原色相，只把每个节点 / 连线的颜色降饱和 + 提亮。
-     想留思源原样（一点不减淡）就把它关掉，见 msbMmStop()。 */
-  mindmap: { enable: true },
+  /* 导图配色：2026-11-09 起停产（恢复思源原色）。
+     原方案只能事后覆盖 inline 颜色，重绘时必露一帧原色 → 频闪，已由 msbMmInit()
+     直接 return 停掉；这里保留开关语义，方便以后改成 CSS filter 方案再打开。 */
+  mindmap: { enable: false },
 
   /* ===== 表格宽度自适应编辑器（用户请求）=====
      默认关。开启后：表格宽度 ≤ 编辑区，超出时按列比例缩到编辑区宽；
@@ -896,6 +897,8 @@ class MistEnhancer extends Plugin {
     }
     this.addTopBarEntry();
     this.addSettingsDock();
+    /* 诊断用（0.2.33 临时）：记录「直接点右缘图标」时的状态 */
+    this.watchDockClicks();
     this.addCommand({
       langKey: "openSettings",
       callback: () => this.openSettings(),
@@ -933,6 +936,14 @@ class MistEnhancer extends Plugin {
         /* 已经关掉了 */
       }
       this._dlg = null;
+    }
+    if (this._dockClickProbe) {
+      document.removeEventListener("click", this._dockClickProbe, true);
+      this._dockClickProbe = null;
+    }
+    if (this._diagTimer) {
+      clearTimeout(this._diagTimer);
+      this._diagTimer = 0;
     }
     const bar = document.querySelector(".mist-topbar-entry");
     if (bar) bar.remove();
@@ -1109,6 +1120,14 @@ class MistEnhancer extends Plugin {
     el.style.height = "100%";
     el.style.overflow = "hidden";
 
+    /* ❗0.2.32：init 有可能被调不止一次（面板被重建 / 插件重载）。
+       不加这一步就会在同一个停靠面板里堆出两个 .mist-dock ——
+       querySelector(".mist-dock") 拿到的是**旧的那个**（可能已脱离可视区），
+       isPanelShown() 于是恒判「没开」，点图标反复开弹窗。
+       和「重复插 <style id> 导致改设置不生效」是同一类事故：先删旧的再建。 */
+    const stale = el.querySelector(":scope > .mist-dock");
+    if (stale) stale.remove();
+
     this.editMode = this.modeKey();
     const box = document.createElement("div");
     box.className = "mist-dock";
@@ -1130,27 +1149,320 @@ class MistEnhancer extends Plugin {
        「点了没反应」，而且因为找到了停靠项，连兜底弹窗都不会弹。
      正确做法是派发真实的 mousedown/mouseup/click 三连（bubbles:true），
      让事件冒泡到 #dockRight 上的原生监听器。 */
+  /* ---------------- 停靠面板诊断（0.2.33 · 排查用，定位后删） ----------------
+     老板反馈「第一次能开、第二次打不开」，本机没法随时复现（要读到真实状态就得
+     开调试端口重启一次思源）。所以改成：在关键节点把状态落到工作区
+     `/temp/mist-enhancer-dock-diag.json`，事后我直接读文件，靠数据定位，不再猜。
+
+     ❗诊断代码一律包 try：它出了任何问题都不能影响面板本身。 */
+  diagBase(tag) {
+    const item = this.findDockItem();
+    const box = item ? this.dockBox(item) : null;
+    const dock = this.dockInstance(box);
+    const panel = document.querySelector(".mist-dock");
+    const tabBox = box ? box.querySelector(".layout-tab-container") : null;
+    const rect = panel ? panel.getBoundingClientRect() : null;
+    let dockState = null;
+    try {
+      dockState = dock
+        ? {
+            panelVisible: dock.panelVisible,
+            floating: typeof dock.isFloating === "function" ? dock.isFloating() : null,
+            hasActive: typeof dock.hasActive === "function" ? dock.hasActive() : null,
+            pin: dock.pin,
+            hasModel:
+              !!(dock.data && item && dock.data[item.getAttribute("data-type")]),
+          }
+        : null;
+    } catch (e) {
+      dockState = { err: String((e && e.message) || e) };
+    }
+    return {
+      at: new Date().toISOString(),
+      tag: tag,
+      item: !!item,
+      type: item ? item.getAttribute("data-type") : "",
+      active: this.isDockItemActive(item),
+      dataId: item ? item.getAttribute("data-id") : "",
+      dataWidth: item ? item.getAttribute("data-width") : "",
+      dockState: dockState,
+      boxW: box ? Math.round(box.getBoundingClientRect().width) : -1,
+      boxInlineW: box ? box.style.width : "",
+      boxInlineML: box ? box.style.marginLeft : "",
+      boxOpacity: box ? box.style.opacity : "",
+      boxFnNone: box ? box.classList.contains("fn__none") : null,
+      mistDockCount: document.querySelectorAll(".mist-dock").length,
+      panelW: rect ? Math.round(rect.width) : -1,
+      panelH: rect ? Math.round(rect.height) : -1,
+      tabs: tabBox
+        ? Array.from(tabBox.children).map(
+            (c) =>
+              (c.classList.contains("fn__none") ? "hidden" : "shown") +
+              ":" +
+              (c.getAttribute("data-id") || "-")
+          )
+        : null,
+      panelShown: this.isPanelShown(),
+    };
+  }
+
+  diag(tag, extra) {
+    try {
+      const rec = this.diagBase(tag);
+      if (extra !== undefined) rec.extra = String(extra);
+      this._diag = this._diag || [];
+      this._diag.push(rec);
+      if (this._diag.length > 80) this._diag.shift();
+      localStorage.setItem("mist-enhancer-dock-diag", JSON.stringify(this._diag));
+      this.diagFlush();
+    } catch (e) {
+      /* 诊断自身出错不能影响功能 */
+    }
+  }
+
+  diagFlush() {
+    if (this._diagTimer) return;
+    this._diagTimer = setTimeout(() => {
+      this._diagTimer = 0;
+      try {
+        const cfg = window.siyuan && window.siyuan.config;
+        const token = cfg && cfg.api && cfg.api.token;
+        const fd = new FormData();
+        fd.append("path", "/temp/mist-enhancer-dock-diag.json");
+        fd.append("isDir", "false");
+        fd.append("modTime", String(Date.now()));
+        fd.append(
+          "file",
+          new Blob([JSON.stringify(this._diag || [], null, 1)], {
+            type: "application/json",
+          }),
+          "diag.json"
+        );
+        fetch("/api/file/putFile", {
+          method: "POST",
+          headers: { Authorization: "Token " + (token || "") },
+          body: fd,
+        }).catch(() => {});
+      } catch (e) {
+        /* 写不了文件就算了 */
+      }
+    }, 200);
+  }
+
+  /* 把停靠栏从「状态说开着、实际没显示」里救回来。
+     只在**图标是激活态但面板不可见**时动手 —— 这个组合在思源里只有一个含义：
+     面板本该开着。反过来「用户点了收起」时图标一定不是激活态，不会误开。
+
+     ❗不去碰 showDock()：源码里它对钉住的停靠栏直接早退（`!isFloating()`），
+       无参调用等于什么都没做；带 force 又跳过 opacity 归位。
+       所以这里只做三件原生自己也会做的事：panelVisible 置真、去掉 fn__none、
+       把被压成 0 的宽度按 data-width 还原。 */
+  repairDock() {
+    const item = this.findDockItem();
+    if (!item) return false;
+    if (!this.isDockItemActive(item)) {
+      this.diag("repair:skip-not-active");
+      return false;
+    }
+    if (this.isPanelShown()) return false;
+    const box = this.dockBox(item);
+    if (!box) return false;
+    const dock = this.dockInstance(box);
+    const before = Math.round(box.getBoundingClientRect().width);
+    try {
+      if (dock) dock.panelVisible = true;
+    } catch (e) {
+      /* 内部状态写不进去就只修 DOM */
+    }
+    box.classList.remove("fn__none");
+    const floating = !!(dock && typeof dock.isFloating === "function" && dock.isFloating());
+    if (!floating && box.style.opacity === "0") box.style.opacity = "";
+    if (box.getBoundingClientRect().width < 20) {
+      const saved = parseInt(item.getAttribute("data-width"), 10) || 0;
+      box.style.width = (saved > 200 ? saved : 348) + "px";
+      if (box.classList.contains("layout__dockr")) {
+        box.style.marginLeft = "var(--b3-layout-space)";
+      } else if (box.classList.contains("layout__dockl")) {
+        box.style.marginRight = "var(--b3-layout-space)";
+      }
+      box.style.minHeight = "8px";
+    }
+    this.diag("repair:done", "w " + before + " -> " + Math.round(box.getBoundingClientRect().width));
+    return this.isPanelShown();
+  }
+
+  /* 老板也可能直接点右缘那个图标（走思源原生，不经过 openSettings）。
+     用捕获阶段的 click 探头做两件事：记状态 + 该开没开时顺手修。
+     原生那条路如果卡在「active 有了但面板没出来」，这里能救回来。 */
+  watchDockClicks() {
+    this._dockClickProbe = (ev) => {
+      try {
+        const t = ev.target;
+        if (!t || !t.closest) return;
+        const item = t.closest(".dock__item");
+        if (!item) return;
+        if ((item.getAttribute("data-type") || "").indexOf(DOCK_TYPE) < 0) return;
+        this.diag("click:capture");
+        setTimeout(() => this.diag("click:+0"), 0);
+        setTimeout(() => {
+          this.diag("click:+350");
+          this.repairDock();
+        }, 350);
+      } catch (e) {
+        /* ignore */
+      }
+    };
+    document.addEventListener("click", this._dockClickProbe, true);
+  }
+
   openSettings() {
+    this.diag("open:enter");
     /* 主题不是薄雾时，设置值一条都落不到界面上（CSS 根本没加载），
        开了面板只会制造「怎么调都没反应」的误会 —— 直接不开。
        手机端 isMist() 恒 false（手机故意用思源默认外观），所以手机不拦。 */
-    if (!this.isMobile() && !this.isMist()) return;
+    if (!this.isMobile() && !this.isMist()) {
+      this.diag("open:not-mist");
+      return;
+    }
     const item = this.findDockItem();
     if (!item) {
+      this.diag("open:no-item");
       this.openDialog();
       return;
     }
     if (this.isPanelShown()) {
+      this.diag("open:already-shown");
       this.refreshDock();
       return;
     }
-    this.fireDockToggle(item);
-    /* 兜底：250ms 后仍没看到面板，就直接开弹窗。
-       宁可给个居中的设置窗，也不能出现「点了没反应」。 */
+    /* 打开分三步（0.2.33 重写，老板习惯从顶栏进来，这条路我们自己能控）：
+       ① 归一容器：摘 fn__none、panelVisible 置真、把「收起」的宽度统一写成 0px
+          —— 原生打开分支只认 `style.width === "0px"` 才会还原宽度，空值或
+          "348px" 它一律不动，那就会出现「状态说开着、栏还是 0 宽」；
+       ② **直接调原生 `dock.toggleModel(type,false,true)`**，不再派发合成鼠标事件：
+          少一层冒泡，也不会顺带触发 window 上 `pt` 里的其它清理逻辑；
+       ③ 350ms 后校验。没出来就先重建 tab（清掉陈旧 data-id，等于把「关掉插件
+          再打开」那条土办法自动化），再不行退居中弹窗，**保证点了永远有反应**。 */
+    const box = this.dockBox(item);
+    const dock = this.dockInstance(box);
+    const type = item.getAttribute("data-type") || DOCK_TYPE;
+
+    /* 栏已收起但图标还亮着 ⇒ 原生会把它当「再点一次＝关闭」，越点越打不开 */
+    if (box && box.getBoundingClientRect().width < 20 && this.isDockItemActive(item)) {
+      item.classList.remove("dock__item--active", "dock__item--activefocus");
+      this.diag("open:clear-fake-active");
+    }
+    this.normalizeDock(box, dock);
+    this.diag("open:normalized");
+
+    this.dockToggle(item, dock, type);
+    requestAnimationFrame(() => {
+      this.forceDockWidth(box, item);
+      this.diag("open:raf");
+    });
+
+    const settle = (allowRebuild) => {
+      if (this.isPanelShown()) {
+        this.refreshDock();
+        return;
+      }
+      if (
+        allowRebuild &&
+        box &&
+        box.getBoundingClientRect().width >= 20 &&
+        this.isDockItemActive(item)
+      ) {
+        /* 图标亮着、栏也够宽，面板却没内容 ⇒ data-id 多半指向一个已经不存在的 tab。
+           清掉它再 toggle，原生会重建 tab 与 model（插件的 init 跟着重跑）。 */
+        item.removeAttribute("data-id");
+        item.classList.remove("dock__item--active", "dock__item--activefocus");
+        this.diag("open:rebuild-tab");
+        this.dockToggle(item, dock, type);
+        requestAnimationFrame(() => this.forceDockWidth(box, item));
+        setTimeout(() => settle(false), 350);
+        return;
+      }
+      if (this.repairDock()) {
+        this.diag("open:repaired");
+        this.refreshDock();
+        return;
+      }
+      this.diag("open:fallback-dialog");
+      this.openDialog();
+    };
     setTimeout(() => {
-      if (this.isPanelShown()) this.refreshDock();
-      else this.openDialog();
-    }, 250);
+      this.diag("open:+350");
+      settle(true);
+    }, 350);
+  }
+
+  /* 调原生开关。优先直接调方法，方法不在（版本差异）才退回合成事件。 */
+  dockToggle(item, dock, type) {
+    if (dock && typeof dock.toggleModel === "function") {
+      try {
+        dock.toggleModel(type, false, true);
+        this.diag("open:toggleModel");
+        return;
+      } catch (e) {
+        this.diag("open:toggleModel-throw", (e && e.message) || e);
+      }
+    }
+    this.fireDockToggle(item);
+  }
+
+  /* 让停靠栏回到「原生能打开」的形态。
+     原生打开分支只在 `style.width === "0px"` 时把宽度还原成 getMaxSize()，
+     所以这里把收起的宽度统一写成 0px —— 不管是 "0px"、"0" 还是空串。 */
+  normalizeDock(box, dock) {
+    if (!box) return;
+    box.classList.remove("fn__none");
+    try {
+      if (dock) dock.panelVisible = true;
+    } catch (e) {
+      /* 内部状态写不进去就只修 DOM */
+    }
+    if (box.getBoundingClientRect().width < 20) {
+      box.style.width = "0px";
+      if (box.classList.contains("layout__dockr")) box.style.marginLeft = "0px";
+      else if (box.classList.contains("layout__dockl")) box.style.marginRight = "0px";
+    }
+  }
+
+  /* 宽度兜底：万一 getMaxSize() 也没算出宽（数据异常），这里按 data-width 还原 */
+  forceDockWidth(box, item) {
+    if (!box || !item) return;
+    if (box.getBoundingClientRect().width >= 20) return;
+    const saved = parseInt(item.getAttribute("data-width"), 10) || 0;
+    box.style.width = (saved > 200 ? saved : 348) + "px";
+    if (box.classList.contains("layout__dockr")) {
+      box.style.marginLeft = "var(--b3-layout-space)";
+    } else if (box.classList.contains("layout__dockl")) {
+      box.style.marginRight = "var(--b3-layout-space)";
+    }
+    box.style.minHeight = "8px";
+  }
+
+  isDockItemActive(item) {
+    return (
+      !!item &&
+      (item.classList.contains("dock__item--active") ||
+        item.classList.contains("dock__item--activefocus"))
+    );
+  }
+
+  /* 面板所在的那条停靠栏容器：右侧 .layout__dockr / 左侧 .layout__dockl。
+     **收起时它的宽度是 0**，这是判断「到底开没开」最可靠的信号。 */
+  dockBox(item) {
+    return (item && item.closest(".layout__dockr, .layout__dockl")) || null;
+  }
+
+  /* 思源对应的 Dock 实例（拿它真正的展开方法，不再靠派发鼠标事件） */
+  dockInstance(box) {
+    const lay = window.siyuan && window.siyuan.layout;
+    if (!lay || !box) return null;
+    if (box.classList.contains("layout__dockr")) return lay.rightDock || null;
+    if (box.classList.contains("layout__dockl")) return lay.leftDock || null;
+    return null;
   }
 
   findDockItem() {
@@ -1165,23 +1477,26 @@ class MistEnhancer extends Plugin {
     );
   }
 
-  /* 面板是否真的开出来了：两个条件缺一不可
-       ① .mist-dock 存在  —— 面板内容建出来了（init 没抛错）。
-          0.2.2/0.2.3 的毛病就出在这：init 一抛错内容压根没建，图标却照样
-          变激活，于是既不显示面板、也不弹兜底窗 →「点了没反应」。
-       ② 图标是激活态，或者面板占到地方了。
-          只看 rect 会在「窗口被遮挡、宽度过渡没推进」时误判成没开，白白弹窗。 */
+  /* 面板是否真的开出来了。判据顺序在 0.2.32 调换过，很关键：
+       ① **先看停靠栏容器宽度**：收起时 .layout__dockr 宽 0 ⇒ 一定没显示。
+       ② 再看面板自身 rect：真占到地方了才算开。
+       ③ 最后才允许用「图标 active」兜底 —— 只用于容器已展开、面板宽度还在
+          过渡中的那一瞬间，避免误判成没开而多弹一个居中窗。
+
+     ❗旧顺序是「active 为真 → 直接算开着」，可思源收起停靠栏后**不清
+       dock__item--active**，图标一直是亮的 ⇒ 插件以为面板还开着，点图标只
+       调 refreshDock()，既不展开也不弹窗 = 点了没反应（老板 2026-11-09 反馈：
+       第一次能开、第二次打不开，要禁用插件再启用才行）。
+       **图标亮着 ≠ 面板开着**，别拿 active 当唯一判据。 */
   isPanelShown() {
     const panel = document.querySelector(".mist-dock");
-    if (!panel) return false;
+    if (!panel || !panel.isConnected) return false;
     const item = this.findDockItem();
-    const active =
-      !!item &&
-      (item.classList.contains("dock__item--active") ||
-        item.classList.contains("dock__item--activefocus"));
-    if (active) return true;
+    const box = this.dockBox(item);
+    if (box && box.getBoundingClientRect().width < 20) return false;
     const r = panel.getBoundingClientRect();
-    return r.width > 40 && r.height > 40;
+    if (r.width > 40 && r.height > 40) return true;
+    return this.isDockItemActive(item);
   }
 
   /* 派发三连事件，走思源原生的 mousedown 监听器（见 openSettings 注释） */
@@ -1194,12 +1509,27 @@ class MistEnhancer extends Plugin {
 
   /* 关闭侧栏面板 = 再点一次右缘图标（思源的停靠项就是这么开关的）。
      面板里的 × 按钮走这里；找不到停靠项时什么都不做，不能把弹窗也一起关掉
-     （弹窗有自己的 ×，见 openDialog）。 */
+     （弹窗有自己的 ×，见 openDialog）。
+     ❗0.2.32：只有图标真是激活态才派发 toggle。否则 toggle 在思源眼里是
+       「打开」，会把面板又开一遍（关不掉）。这时改用 hideDock()。 */
   closeDockPanel() {
     const item = this.findDockItem();
     if (!item) return;
     if (!this.isPanelShown()) return;
-    this.fireDockToggle(item);
+    this.diag("close:enter");
+    if (this.isDockItemActive(item)) {
+      this.fireDockToggle(item);
+      setTimeout(() => this.diag("close:+300"), 300);
+      return;
+    }
+    const dock = this.dockInstance(this.dockBox(item));
+    if (dock && typeof dock.hideDock === "function") {
+      try {
+        dock.hideDock();
+      } catch (e) {
+        /* 打不开就静默：面板关不掉不是致命问题，别抛到控制台干扰排查 */
+      }
+    }
   }
 
   /* 面板本来就在：把控件按当前状态刷一遍（可能在别处改过设置） */
@@ -1684,7 +2014,15 @@ class MistEnhancer extends Plugin {
   /* ================= 思维导图配色（0.2.24）================= */
 
   msbMmInit() {
-    /* 手机端不做：手机上本来就不套薄雾，导图保持思源默认 */
+    /* 2026-11-09 停产：恢复思源自带的导图颜色。
+       原因：节点颜色是内核算好后写进每个节点的 inline style，连线画在 canvas 上，
+       主题和插件都只能「等它画完再覆盖」。每次重绘（拖动、缩放、hover、选中、
+       切明暗）都会先露一帧原色，用户看到的就是频闪，体验比原色更差。
+       代码保留（msbMmPaint / ToneNode / hookCanvas 都还在），
+       日后若改成容器级 CSS filter，从这里接上即可。 */
+    if (this._mmOn) this.msbMmStop();
+    return;
+
     if (this._mobileOnly) return;
     if (this.state.mindmap && this.state.mindmap.enable === false) {
       this.msbMmStop();
@@ -4429,13 +4767,72 @@ class MistEnhancer extends Plugin {
   /* ---------------- 本机字体列表（0.2.11）---------------- */
 
   /* 探测本机已安装字体，结果缓存在 this._fonts（一次会话只探一次）。
-     路子一 queryLocalFonts：Chromium 本地字体访问 API，清单最全；权限被拒
-     （Electron 默认不放行）会 reject，自动降级到路子二。
-     路子二 canvas 度量：拿 FONT_CANDIDATES 逐个量同一串字的宽度，和后备
-     字体量得不一样就说明装了。无需权限，Win/mac 通用。
-     两条路都空（理论上不会）就返回空数组，面板会提示手打。 */
+     统一输出 [{ family, label }]：family 写进 CSS，label 给人看。
+
+     路子一（0.2.31 起首选）思源内核 /api/system/getSysFonts：给的是
+     DirectWrite 的**本地化**字体表，displayName 就是「思源黑体 CN」
+     「字魂创粗黑(商用需授权)」「宋体」这些中文名，和「设置→外观」里
+     的下拉完全一致；family 仍是能直接写进 CSS 的英文名。
+     ❗原来只用 queryLocalFonts()，它回的 family 全是英文（Source Han
+     Sans SC），所以中文名一条都搜不到——老板报的就是这个。
+     路子二 queryLocalFonts：内核接口不可用时兜底，只有英文族名。
+     路子三 canvas 度量：拿 FONT_CANDIDATES 逐个量同一串字的宽度。
+     三条都空就返回空数组，面板会提示手打。 */
   detectFonts() {
-    if (this._fonts) return Promise.resolve(this._fonts);
+    if (this._fonts) return this._fonts;
+    return this.fontsFromKernel().then((list) => {
+      if (list && list.length) return (this._fonts = list);
+      return this.fontsFromBrowser().then((l2) => (this._fonts = l2));
+    });
+  }
+
+  /* 内核字体表 → [{family,label}]。同一 family 有多个字重条目（思源那边
+     一条一个字重），这里只留一个标签：优先 weight 400 的 displayName
+     （最干净），否则挑最短的，再把尾部字重词剥掉。 */
+  fontsFromKernel() {
+    const tk =
+      (window.siyuan &&
+        window.siyuan.config &&
+        window.siyuan.config.api &&
+        window.siyuan.config.api.token) ||
+      "";
+    const headers = { "Content-Type": "application/json" };
+    if (tk) headers.Authorization = "Token " + tk;
+    return fetch("/api/system/getSysFonts", { method: "POST", headers, body: "{}" })
+      .then((r) => (r && r.ok ? r.json() : null))
+      .then((res) => {
+        const arr = res && res.code === 0 && Array.isArray(res.data) ? res.data : null;
+        if (!arr) return null;
+        const byFam = new Map();
+        for (const f of arr) {
+          const family = (f && f.family ? String(f.family) : "").trim();
+          if (!family) continue;
+          const dn = (f.displayName ? String(f.displayName) : family).trim();
+          const w = typeof f.weight === "number" ? f.weight : 400;
+          const old = byFam.get(family);
+          if (!old) byFam.set(family, { dn, w });
+          else {
+            const better =
+              (w === 400 && old.w !== 400) || (w !== 400 && old.w !== 400 && dn.length < old.dn.length);
+            if (better) byFam.set(family, { dn, w });
+          }
+        }
+        const WR =
+          /\s+(thin|extralight|ultralight|light|regular|normal|book|medium|semibold|demibold|bold|extrabold|ultrabold|heavy|black|extrablack|oblique|italic)$/i;
+        return [...byFam.entries()]
+          .map(([family, o]) => {
+            let label = o.dn;
+            for (let i = 0; i < 3; i++) label = label.replace(WR, "").trim() || label;
+            return { family, label };
+          })
+          .sort((a, b) => a.label.localeCompare(b.label, "zh-Hans-CN"));
+      })
+      .catch(() => null);
+  }
+
+  /* 浏览器侧兜底：queryLocalFonts 只有英文族名；再不行用 canvas 量宽。 */
+  fontsFromBrowser() {
+    const toItems = (names) => names.map((n) => ({ family: n, label: n }));
     const byCanvas = () => {
       const cv = document.createElement("canvas").getContext("2d");
       const test = "mmmmmmmmmmlli 薄雾主题 WWWWIIII 0123";
@@ -4450,22 +4847,18 @@ class MistEnhancer extends Plugin {
           cv.font = "72px '" + name + "', " + b;
           return cv.measureText(test).width !== base[b];
         });
-      return FONT_CANDIDATES.filter(hit).sort((a, b) => a.localeCompare(b));
-    };
-    const keep = (list) => {
-      this._fonts = list;
-      return list;
+      return toItems(FONT_CANDIDATES.filter(hit).sort((a, b) => a.localeCompare(b)));
     };
     if (typeof window.queryLocalFonts === "function") {
       return window
         .queryLocalFonts()
         .then((fs) => {
           const names = [...new Set((fs || []).map((f) => f && f.family).filter(Boolean))];
-          return keep(names.length ? names.sort((a, b) => a.localeCompare(b)) : byCanvas());
+          return names.length ? toItems(names.sort((a, b) => a.localeCompare(b))) : byCanvas();
         })
-        .catch(() => keep(byCanvas()));
+        .catch(() => byCanvas());
     }
-    return Promise.resolve(keep(byCanvas()));
+    return Promise.resolve(byCanvas());
   }
 
   renderFontList(root) {
@@ -4477,7 +4870,8 @@ class MistEnhancer extends Plugin {
     if (!this._fonts) {
       box.innerHTML = '<div class="mist-empty">正在检测本机已安装字体…</div>';
       if (cnt) cnt.textContent = "";
-      this.detectFonts().then(() => {
+      /* detectFonts 命中缓存时会直接返回数组，包一层 Promise 保证 .then 可用 */
+      Promise.resolve(this.detectFonts()).then(() => {
         if (root.contains(box)) this.renderFontList(root);
       });
       return;
@@ -4486,19 +4880,29 @@ class MistEnhancer extends Plugin {
     const q = (inp && inp.value ? inp.value : "").trim().toLowerCase();
     const target = root.querySelector('[data-k="' + this._fontTarget + '"]');
     const cur = (target && target.value ? target.value : "").split(",")[0].trim();
-    let list = q ? this._fonts.filter((f) => f.toLowerCase().includes(q)) : this._fonts.slice();
+    /* 中英文都能搜：label 是本地化名（思源黑体 CN），family 是 CSS 名
+       （Source Han Sans CN）。老板搜「思源黑体」能命中就是靠前一条。 */
+    let list = q
+      ? this._fonts.filter(
+          (f) => f.label.toLowerCase().includes(q) || f.family.toLowerCase().includes(q)
+        )
+      : this._fonts.slice();
     /* 当前设的字体万一没探到（探测漏网/手打的别名），也摆在第一位，
-      不然用户看不到自己现在用的是什么、想改回去找不到。 */
-    if (cur && !list.some((f) => f === cur)) list.unshift(cur);
+       不然用户看不到自己现在用的是什么、想改回去找不到。搜索时不插，
+       免得跟匹配结果混在一起。 */
+    if (!q && cur && !list.some((f) => f.family === cur)) list.unshift({ family: cur, label: cur });
     if (cnt) cnt.textContent = list.length + " 款";
     box.innerHTML = list.length
       ? list
-          .map(
-            (f) =>
-              `<div class="fi${f === cur ? " on" : ""}" data-font="${esc(f)}" title="${esc(f)}">` +
-              `<span class="nm" style="font-family:'${esc(f)}',sans-serif">${esc(f)}</span>` +
-              `<span class="pv" style="font-family:'${esc(f)}',sans-serif">永</span></div>`
-          )
+          .map((f) => {
+            const on = f.family === cur ? " on" : "";
+            const tip = f.label === f.family ? f.family : f.label + " · " + f.family;
+            return (
+              `<div class="fi${on}" data-font="${esc(f.family)}" title="${esc(tip)}">` +
+              `<span class="nm">${esc(f.label)}</span>` +
+              `<span class="pv" style="font-family:'${esc(f.family)}',sans-serif">永</span></div>`
+            );
+          })
           .join("")
       : '<div class="mist-empty">没有匹配的字体。列表只列本机已安装的；也可以直接在上面输入框里手打字体名。</div>';
     box.querySelectorAll(".fi").forEach((el) => {
