@@ -906,6 +906,49 @@ class MistEnhancer extends Plugin {
     this.watchTree();
     this.watchPin();
     this.apply();
+    this.ensureFloatingStatusBar();
+  }
+
+  /* 保证「浮动状态栏」开着 —— 薄雾把 #status 做成右下角胶囊，
+     但思源有个硬逻辑：hideStatusBar=true 且 showFloatingStatusBar=false 时，
+     整条状态栏加 fn__none，并且**连统计都不计算**（.status__counter 永远空）。
+     打开浮动状态栏后思源才会往 counter 里填字数/引用/块数，胶囊才有内容。
+
+     接口坑（2026-11-17 实测）：/api/config/setAppearance 根本不存在——
+     连瞎编的 /api/config/xxx 都返回 200 空 body（前端 fetch 兜底），别再用。
+     正解是思源设置界面自己用的 /api/setting/patch，且必须**嵌套**：
+       {"appearance":{"showFloatingStatusBar":true}}
+     扁平的 {"appearance.showFloatingStatusBar":true} 会报 code:-1 unsupported namespace。
+     只在确实为 false 时写一次，幂等；失败不阻塞启动。 */
+  ensureFloatingStatusBar() {
+    try {
+      const ap = window.siyuan && window.siyuan.config && window.siyuan.config.appearance;
+      if (!ap || ap.showFloatingStatusBar !== false) return;
+      fetch("/api/setting/patch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ appearance: { showFloatingStatusBar: true } }),
+      })
+        .then((r) => (r && r.ok ? r.json() : null))
+        .then((res) => {
+          if (!res || res.code !== 0) return;
+          /* 关键：配置改完只让 #status 不再 fn__none，但思源不会重算统计——
+             .status__counter 仍空。统计只在打开/切换 protyle 时计算。
+             所以延迟点一下当前激活的标签页，走一次它的打开流程把统计填进去。
+             只点当前 tab、不切文档、不滚动，对用户无感。 */
+          setTimeout(() => {
+            try {
+              const bar =
+                document.querySelector(".layout-tab-bar .item--focus") ||
+                document.querySelector(".layout-tab-bar .item");
+              if (bar) bar.click();
+            } catch (e) {}
+          }, 600);
+        })
+        .catch(() => {});
+    } catch (e) {
+      /* 配置还没就绪等下一轮；这里不重试，下次启动会再试 */
+    }
   }
 
   /* 是否移动端。
