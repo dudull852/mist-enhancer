@@ -2,7 +2,7 @@
     "name": "mist-enhancer",
     "author": "dudull",
     "url": "https://github.com/dudull852/mist-enhancer",
-    "version": "0.2.34",
+    "version": "0.2.37",
     "minAppVersion": "3.8.0",
     "backends": [
         "all"
